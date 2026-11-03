@@ -7,6 +7,8 @@ malformed response) so callers degrade gracefully instead of crashing — same
 pattern as sentiment_scanner.read_latest() and the OANDA client.
 """
 import json
+import logging
+import urllib.error
 import os
 import urllib.request
 
@@ -113,8 +115,14 @@ def _ask_haiku(prompt, system, max_tokens, timeout):
         with urllib.request.urlopen(req, timeout=timeout) as response:
             data = json.loads(response.read())
         if data.get('stop_reason') == 'max_tokens':
+            logging.warning('Haiku response exceeded output limit')
             return None
         return ''.join(x.get('text', '') for x in data.get('content', [])
                        if x.get('type') == 'text').strip() or None
-    except Exception:
+    except urllib.error.HTTPError as exc:
+        logging.warning('Haiku HTTP failure status=%s', exc.code)
         return None
+    except Exception as exc:
+        logging.warning('Haiku request failed type=%s', type(exc).__name__)
+        return None
+

@@ -48,7 +48,7 @@ def narrate(payload):
     prompt = (f"Portfolio data:\n{_context(payload)}\n\n"
               "Write a short (3-4 sentence) plain-English summary of how this "
               "portfolio is doing right now and why, based only on the data above.")
-    return ai_client.ask(prompt, system=SYSTEM, max_tokens=300)
+    return ai_client.ask(prompt, system=SYSTEM, max_tokens=1000)
 
 
 def answer(payload, question):
@@ -59,4 +59,4 @@ def answer(payload, question):
     question = question.strip()[:400]
     prompt = (f'Portfolio data:\n{_context(payload)}\n\nUser question: "{question}"\n\n'
               "Answer in 2-4 sentences, using only the data above.")
-    return ai_client.ask(prompt, system=SYSTEM, max_tokens=350)
+    return ai_client.ask(prompt, system=SYSTEM, max_tokens=1000)

@@ -59,6 +59,14 @@ def reject_cross_origin_mutations():
             return jsonify({'error': 'Cross-origin request rejected'}), 403
 
 
+@app.after_request
+def private_response_headers(response):
+    if request.path.startswith('/api/') or request.path == '/account':
+        response.headers['Cache-Control'] = 'no-store, private'
+        response.vary.add('Cookie')
+    return response
+
+
 def _lang():
     return "pl" if request.cookies.get("bb_lang") == "pl" else "en"
 
@@ -318,6 +326,9 @@ def api_recommend():
 @app.route("/api/user/create", methods=["POST"])
 @with_state_lock
 def user_create():
+    a, aid = _me()
+    if not a:
+        return jsonify({"error": "Sign in to create a portfolio.", "login_required": True}), 401
     p = request.get_json(force=True, silent=True) or {}
     name = (p.get("name") or "My").strip()[:24] or "My"
     mix = {k: float(v) for k, v in (p.get("mix") or {}).items() if k in VALID_IDS and float(v) > 0}
@@ -488,8 +499,7 @@ def _bind_supabase_user(accounts, tokens, legacy_aid=None):
 
 def _can_access(uid):
     account, _ = _me()
-    return bool((account and (account.get("uid") == uid or uid in account.get("portfolio_ids", [])))
-                or session.get("anon_uid") == uid)
+    return bool(account and (account.get("uid") == uid or uid in account.get("portfolio_ids", [])))
 
 
 @app.route("/api/config")
@@ -647,7 +657,7 @@ def auth_logout():
             except sa.AuthError:
                 pass  # Local session is revoked even if the provider is unavailable.
     session.pop('auth_sid', None)
-    session.pop("aid", None)
+    session.clear()
     return jsonify({"ok": True})
 
 
@@ -744,7 +754,7 @@ def user_review(uid):
         return jsonify({"error": "not found"}), 404
     try:
         import ai_features
-        mixkey = _lang() + "_review_" + "_".join(f"{k}{v}" for k, v in sorted((p.get("mix") or {}).items()))
+        mixkey = _lang() + "_review_" + uid + "_" + "_".join(f"{k}{v}" for k, v in sorted((p.get("mix") or {}).items()))
         text = cached(mixkey, 3600, lambda: ai_features.portfolio_review(p))
         return jsonify({"text": text} if text else {"available": False})
     except Exception as e:
@@ -1606,7 +1616,7 @@ async function doRecover(){
   closeAuth();afterAuth();
 }
 async function doLogout(){await fetch('/api/auth/logout',{method:'POST'}).catch(()=>{});
-  ME={signed_in:false};renderAuth();
+  ME={signed_in:false};window._meUid=null;LAST_PORTFOLIO=null;localStorage.removeItem('bb_uid');renderAuth();
   $('#mebody').innerHTML='<div class="skel"><span class="sp"></span>Syncing your Blackbox with live markets…</div>';
   $('#heroCta').textContent=uid()?'View my Blackbox →':"Let's go →";go('home')}
 function onGoogleCred(resp){
@@ -1835,11 +1845,14 @@ function showName(mix){PENDMIX=mix;go('start');
     nc.scrollIntoView({behavior:'smooth',block:'center'});$('#uname').focus()},80)}
 async function startBlackbox(){
   if(!PENDMIX)return;
+  await refreshMe();
+  if(!ME.signed_in){openAuth();return;}
   const btn=$('#startBtn');btn.disabled=true;btn.textContent='Starting…';
   const name=($('#uname').value||'My').trim();
   const r=await fetch('/api/user/create',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({name,mix:PENDMIX,profile:PENDPROFILE||{}})}).then(r=>r.json()).catch(()=>null);
   btn.disabled=false;btn.textContent='🚀 Start my Blackbox';
+  if(r&&r.login_required){openAuth();return;}
   if(!r||!r.user_id){alert('Could not start — check the mix totals 100%.');return}
   if(r.signed_in)localStorage.removeItem('bb_uid');else localStorage.setItem('bb_uid',r.user_id);
   $('#heroCta').textContent='View my Blackbox →';
@@ -1858,13 +1871,8 @@ async function loadMe(){
     const m=await response.json();
     ME=m;renderAuth();
     let portfolio=m.signed_in?m.portfolio:null;
-    if(!m.signed_in&&uid()){
-      const guest=await fetch('/api/user/'+encodeURIComponent(uid()));
-      if(guest.ok)portfolio=await guest.json();
-      else if(guest.status===404||guest.status===403)localStorage.removeItem('bb_uid');
-      else throw new Error('Portfolio unavailable');
-    }
     if(pageFromPath()!=='account')return;
+    if(!m.signed_in){window._meUid=null;LAST_PORTFOLIO=null;$('#mebody').innerHTML='<div class="skel">'+L('Sign in to view your private portfolio.','Zaloguj się, aby zobaczyć swój prywatny portfel.')+'<br><button class="cta" onclick="openAuth()">'+L('Sign in','Zaloguj się')+'</button></div>';return;}
     if(portfolio){renderMe(portfolio);return}
     showEmptyPortfolio();
   }catch{
@@ -1937,12 +1945,14 @@ function renderMe(r){
 async function loadNarration(uid){
   const box=$('#narrtext');if(!box)return;
   const r=await fetch('/api/user/'+uid+'/narrate').then(r=>r.json()).catch(()=>null);
-  box.textContent=(r&&r.text)?r.text:"AI summary isn't available right now — it needs an AI key configured on the server.";
+  if(window._meUid!==uid)return;
+  box.textContent=(r&&r.text)?r.text:L('The AI summary is temporarily unavailable. Please try again later.','Podsumowanie AI jest chwilowo niedostępne. Spróbuj ponownie później.');
 }
 async function loadReview(uid){
   const box=$('#reviewtext');if(!box)return;
   const r=await fetch('/api/user/'+uid+'/review').then(r=>r.json()).catch(()=>null);
-  box.innerHTML=(r&&r.text)?`<div class="airich">${esc(r.text)}</div>`:"AI risk review isn't available right now — it needs an AI key on the server.";
+  if(window._meUid!==uid)return;
+  box.innerHTML=(r&&r.text)?`<div class="airich">${esc(r.text)}</div>`:L('The AI risk review is temporarily unavailable. Please try again later.','Analiza ryzyka AI jest chwilowo niedostępna. Spróbuj ponownie później.');
 }
 
 /* ---------- milestone badges (computed from real portfolio data) ---------- */
@@ -2000,7 +2010,7 @@ async function askPortfolio(){
   const r=await fetch('/api/user/'+uid+'/ask',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({question:q})}).then(r=>r.json()).catch(()=>null);
   inp.disabled=false;inp.focus();
-  row.querySelector('.a').textContent=(r&&r.answer)?r.answer:"Couldn't get an answer — AI may not be configured on the server.";
+  row.querySelector('.a').textContent=(r&&r.answer)?r.answer:L('Could not get an AI answer. Please try again later.','Nie udało się uzyskać odpowiedzi AI. Spróbuj ponownie później.');
 }
 
 /* ---------- modal + charts (redesigned) ---------- */

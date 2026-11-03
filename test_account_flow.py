@@ -36,12 +36,34 @@ class AccountFlow(unittest.TestCase):
         self.client.post('/api/auth/logout')
         self.assertEqual(self.client.post('/api/auth/password',json=dict(self.credentials,password='wrong')).status_code,401)
     def test_guest_portfolio_adopted_only_by_owner(self):
-        uid=self.create()
+        uid='old-guest'
+        self.state[mod.USERS][uid]={'name':'Guest','mix':{'spx_hold':100}}
+        with self.client.session_transaction() as sess: sess['anon_uid']=uid
         self.assertEqual(self.client.post('/api/auth/register',json=dict(self.credentials,adopt_uid=uid)).status_code,200)
         self.assertEqual(self.client.get('/api/me').json['portfolio']['uid'],uid)
         other=mod.app.test_client()
         other.post('/api/auth/register',json=dict(self.credentials,email='other@example.invalid',adopt_uid=uid))
         self.assertIsNone(other.get('/api/me').json['portfolio'])
+    def test_private_routes_reject_other_account_and_signed_out_clients(self):
+        self.register();uid=self.create()
+        other=mod.app.test_client()
+        other.post('/api/auth/register',json=dict(self.credentials,email='second@example.invalid'))
+        guest=mod.app.test_client()
+        with guest.session_transaction() as sess: sess['anon_uid']=uid
+        for client in [other,guest]:
+            for suffix,method in [('', 'get'),('/narrate','get'),('/review','get'),('/ask','post'),('/delete','post')]:
+                response=getattr(client,method)('/api/user/'+uid+suffix)
+                self.assertEqual(response.status_code,403)
+                self.assertIn('no-store',response.headers['Cache-Control'])
+        self.assertIn(uid,self.state[mod.USERS])
+        self.assertEqual(self.client.get('/api/user/'+uid).status_code,200)
+        self.client.post('/api/auth/logout')
+        self.assertEqual(self.client.get('/api/user/'+uid).status_code,403)
+
+    def test_guest_cannot_create_portfolio(self):
+        self.assertEqual(self.client.post('/api/user/create',json={'mix':{'spx_hold':100}}).status_code,401)
+        self.assertEqual(self.state[mod.USERS],{})
+
     def test_recovery_retains_portfolio(self):
         key=self.register()['recovery_key'];uid=self.create();self.client.post('/api/auth/logout')
         self.assertEqual(self.client.post('/api/auth/recover',json={'key':key}).status_code,200)

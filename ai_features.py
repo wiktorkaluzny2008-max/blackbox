@@ -227,7 +227,7 @@ def portfolio_review(payload):
         "strategy concentration. No advice, no buy/sell calls.\n\n"
         f"MIX:\n{chr(10).join(lines)}\n\n{blend_txt}"
     )
-    return ai_client.ask(prompt, system=GUARD, max_tokens=500)
+    return ai_client.ask(prompt, system=GUARD, max_tokens=1000)
 
 
 # ---------------------------------------------------------------- compare
