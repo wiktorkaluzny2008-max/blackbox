@@ -2,6 +2,7 @@
 import json
 import os
 from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
 from dotenv import load_dotenv
@@ -14,15 +15,22 @@ def _connection():
     return psycopg.connect(os.environ["DATABASE_URL"], sslmode="require", prepare_threshold=None)
 
 
+_lock_depth = ContextVar("blackbox_state_lock_depth", default=0)
+
+
 @contextmanager
 def locked():
     """Serialize all account/portfolio writers across app and scanner processes."""
-    if not os.getenv("DATABASE_URL"):
+    if _lock_depth.get() or not os.getenv("DATABASE_URL"):
         yield
         return
     with _connection() as conn, conn.cursor() as cur:
         cur.execute("select pg_advisory_xact_lock(786714281)")
-        yield
+        token = _lock_depth.set(1)
+        try:
+            yield
+        finally:
+            _lock_depth.reset(token)
 
 
 def with_state_lock(fn):

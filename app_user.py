@@ -9,6 +9,7 @@ Password authentication persists accounts and portfolios through state_store.
 Guest demo portfolios retain a local browser id. Design: premium-site-workflow + emil-design-eng.
 """
 import os, json, time, secrets, hashlib
+import supabase_auth as sa
 from werkzeug.security import generate_password_hash, check_password_hash
 from state_store import with_state_lock
 from datetime import datetime, timezone, timedelta
@@ -46,6 +47,16 @@ app.permanent_session_lifetime = timedelta(days=60)
 app.config.update(SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_HTTPONLY=True,
                   SESSION_COOKIE_SECURE=bool(os.getenv("DATABASE_URL")))
 _cache = {}
+
+
+@app.before_request
+def reject_cross_origin_mutations():
+    if request.method in {'POST', 'PUT', 'PATCH', 'DELETE'}:
+        origin = request.headers.get('Origin')
+        allowed = {request.host_url.rstrip('/'),
+                   os.getenv('PUBLIC_APP_URL', 'https://blackbox.wiktor-kaluzny2008.workers.dev').rstrip('/')}
+        if origin and origin.rstrip('/') not in allowed:
+            return jsonify({'error': 'Cross-origin request rejected'}), 403
 
 
 def _lang():
@@ -362,16 +373,116 @@ def _hash_key(key, salt):
     return hashlib.sha256((salt + key.strip().lower()).encode()).hexdigest()
 
 
+def _auth_sessions():
+    from state_store import load
+    return load('auth_sessions', os.path.join(HERE, 'logs', 'auth_sessions.json'))
+
+
+def _save_auth_sessions(records):
+    from state_store import save
+    save('auth_sessions', os.path.join(HERE, 'logs', 'auth_sessions.json'), records)
+
+
+@with_state_lock
+def _supabase_session_user():
+    sid = session.get('auth_sid')
+    records = _auth_sessions()
+    record = records.get(sid)
+    if not record or record.get('until', 0) < time.time():
+        return None
+    tokens = record['tokens']
+    try:
+        if tokens.get('expires_at', 0) < time.time() + 30:
+            tokens = sa.refresh(tokens['refresh_token'])
+            record['tokens'] = tokens
+            _save_auth_sessions(records)
+        user = sa.get_user(tokens['access_token'])
+        sa.assert_active(user)
+        if user['id'] != record['user_id']:
+            return None
+        return user
+    except sa.AuthError as exc:
+        if exc.status >= 500 or exc.status == 429:
+            raise  # Outages must not silently destroy a valid login.
+        records.pop(sid, None)
+        _save_auth_sessions(records)
+        session.pop('auth_sid', None)
+        session.pop('aid', None)
+        return None
+
+
 def _me():
-    aid = session.get("aid")
-    if not aid:
+    aid = session.get('aid')
+    account = _accounts().get(aid) if aid else None
+    if not account:
         return None, None
-    return _accounts().get(aid), aid
+    if account.get('supabase_user_id'):
+        user = _supabase_session_user()
+        if not user or user['id'] != account['supabase_user_id']:
+            return None, None
+    return account, aid
 
 
-def _login(aid):
+def _login(aid, tokens=None):
+    session.pop('auth_sid', None)
     session.permanent = True
-    session["aid"] = aid
+    session['aid'] = aid
+    if tokens:
+        sa.assert_active(tokens.get('user'))
+        records = _auth_sessions()
+        now = time.time()
+        records = {k: v for k, v in records.items() if v.get('until', 0) > now}
+        sid = secrets.token_urlsafe(32)
+        records[sid] = {'user_id': tokens['user']['id'], 'tokens': tokens,
+                        'until': now + 60 * 86400}
+        _save_auth_sessions(records)
+        session['auth_sid'] = sid
+
+
+@app.errorhandler(sa.AuthError)
+def auth_service_error(exc):
+    messages = {
+        'email_not_confirmed': 'Confirm your email before signing in.',
+        'user_already_exists': 'This email is already registered. Please sign in.',
+        'email_exists': 'This email is already registered. Please sign in.',
+        'over_email_send_rate_limit': 'Email limit reached. Please try again later.',
+        'over_request_rate_limit': 'Too many attempts. Please try again later.',
+    }
+    message = messages.get(exc.code, 'Authentication is temporarily unavailable. Please try again.'
+                           if exc.status >= 500 else 'Email or password was not recognised.')
+    return jsonify({'error': message}), exc.status
+
+
+def _bind_supabase_user(accounts, tokens, legacy_aid=None):
+    user = tokens.get('user') or {}
+    sa.assert_active(user)
+    suid = user['id']
+    aid = next((k for k, a in accounts.items() if a.get('supabase_user_id') == suid), None)
+    if legacy_aid:
+        if aid and aid != legacy_aid:
+            raise sa.AuthError('account_link_conflict', 409)
+        aid = legacy_aid
+    if aid is None:
+        # Never attach a pre-existing portfolio by email alone.
+        if any((a.get('email') or '').casefold() == (user.get('email') or '').casefold()
+               for a in accounts.values()):
+            raise sa.AuthError('account_link_conflict', 409)
+        aid = secrets.token_hex(8)
+        accounts[aid] = {'name': str((user.get('user_metadata') or {}).get('name') or 'Trader')[:24],
+                         'email': user.get('email'), 'created': datetime.now(timezone.utc).strftime('%Y-%m-%d'),
+                         'uid': None, 'portfolio_ids': []}
+        adopt = session.get('anon_uid')
+        if adopt and adopt in _load(USERS, {}):
+            accounts[aid]['uid'] = adopt
+            accounts[aid]['portfolio_ids'] = [adopt]
+            session.pop('anon_uid', None)
+    accounts[aid]['supabase_user_id'] = suid
+    # After migration the old password/recovery key cannot bypass Supabase.
+    accounts[aid].pop('password_hash', None)
+    accounts[aid].pop('key_hash', None)
+    _save_accounts(accounts)
+    _login(aid, tokens)
+    return accounts[aid]
 
 
 def _can_access(uid):
@@ -382,7 +493,8 @@ def _can_access(uid):
 
 @app.route("/api/config")
 def api_config():
-    return jsonify({"google_client_id": os.getenv("GOOGLE_CLIENT_ID") or None})
+    return jsonify({"google_client_id": (os.getenv("GOOGLE_CLIENT_ID") or None) if not sa.enabled() else None,
+                    "auth_provider": "supabase" if sa.enabled() else "legacy"})
 
 
 @app.route("/api/i18n/pl")
@@ -402,6 +514,12 @@ def auth_register():
     accounts = _accounts()
     if any((a.get("email") or "").casefold() == email for a in accounts.values()):
         return jsonify({"error": "email already registered"}), 409
+    if sa.enabled():
+        result = sa.signup(email, password, name)
+        if not result.get('access_token'):
+            return jsonify({'ok': True, 'confirmation_required': True})
+        account = _bind_supabase_user(accounts, result)
+        return jsonify({'ok': True, 'name': account['name']})
     aid = secrets.token_hex(8)
     key = _gen_key()
     salt = secrets.token_hex(8)
@@ -423,12 +541,30 @@ def auth_register():
 
 
 @app.route("/api/auth/password", methods=["POST"])
+@with_state_lock
 def auth_password():
     p = request.get_json(force=True, silent=True) or {}
     email = (p.get("email") or "").strip().casefold()
     password = p.get("password") or ""
     if len(email) > 254 or len(password) > 1024:
         return jsonify({"error": "invalid credentials"}), 401
+    if sa.enabled():
+        accounts = _accounts()
+        legacy_aid = next((k for k, a in accounts.items()
+                           if (a.get('email') or '').casefold() == email and not a.get('supabase_user_id')), None)
+        if legacy_aid:
+            legacy = accounts[legacy_aid]
+            if not legacy.get('password_hash') or not check_password_hash(legacy['password_hash'], password):
+                return jsonify({'error': 'Email or password was not recognised.'}), 401
+            try:
+                sa.migrate(email, password, legacy['name'], legacy_aid)
+            except sa.AuthError as exc:
+                if exc.code not in {'email_exists', 'user_already_exists'}:
+                    raise
+            # A duplicate is safe only if Supabase also verifies the supplied password.
+        tokens = sa.signin(email, password)
+        account = _bind_supabase_user(accounts, tokens, legacy_aid)
+        return jsonify({'ok': True, 'name': account['name']})
     for aid, account in _accounts().items():
         if ((account.get("email") or "").casefold() == email
                 and account.get("password_hash")
@@ -444,6 +580,8 @@ def auth_recover():
     key = (p.get("key") or "")
     accounts = _accounts()
     for aid, a in accounts.items():
+        if sa.enabled() and a.get("supabase_user_id"):
+            continue
         stored = a.get("key_hash") or ""
         valid = (check_password_hash(stored, key) if stored.startswith("pbkdf2:")
                  else secrets.compare_digest(stored, _hash_key(key, a.get("salt") or "")))
@@ -456,6 +594,8 @@ def auth_recover():
 @app.route("/api/auth/google", methods=["POST"])
 @with_state_lock
 def auth_google():
+    if sa.enabled():
+        return jsonify({"error": "Please use email and password to sign in."}), 400
     cid = os.getenv("GOOGLE_CLIENT_ID")
     if not cid:
         return jsonify({"error": "google not configured"}), 400
@@ -493,7 +633,19 @@ def auth_google():
 
 
 @app.route("/api/auth/logout", methods=["POST"])
+@with_state_lock
 def auth_logout():
+    sid = session.get('auth_sid')
+    if sid:
+        records = _auth_sessions()
+        record = records.pop(sid, None)
+        _save_auth_sessions(records)
+        if record:
+            try:
+                sa.signout(record['tokens']['access_token'])
+            except sa.AuthError:
+                pass  # Local session is revoked even if the provider is unavailable.
+    session.pop('auth_sid', None)
     session.pop("aid", None)
     return jsonify({"ok": True})
 
@@ -1407,8 +1559,8 @@ function heroGo(){ if((ME&&ME.signed_in&&ME.portfolio)||uid()){go('account')} el
 function renderAuth(){
   const b=$('#authbox');
   if(ME&&ME.signed_in){
-    b.innerHTML=`<div class="uchip">${ME.picture?`<img src="${ME.picture}" referrerpolicy="no-referrer" alt="">`:`<span class="uinit">${(ME.name||'?')[0].toUpperCase()}</span>`}
-      <span class="un">${ME.name}</span>
+    b.innerHTML=`<div class="uchip">${ME.picture?`<img src="${ME.picture}" referrerpolicy="no-referrer" alt="">`:`<span class="uinit">${esc((ME.name||'?')[0].toUpperCase())}</span>`}
+      <span class="un">${esc(ME.name)}</span>
       <button class="cta ghost small" onclick="doLogout()">Sign out</button></div>`;
   } else b.innerHTML='<button class="cta ghost small" onclick="openAuth()">Sign in</button>';
 }
@@ -1418,8 +1570,8 @@ function showAV(v){document.querySelectorAll('.aview').forEach(x=>x.style.displa
   const el=document.getElementById('av-'+v);if(el)el.style.display='block'}
 async function doPasswordLogin(){
   const r=await fetch('/api/auth/password',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({email:$('#loginemail').value,password:$('#loginpassword').value})}).then(r=>r.ok?r.json():null).catch(()=>null);
-  if(!r||!r.ok){$('#passworderr').textContent='Email or password was not recognised.';return}
+    body:JSON.stringify({email:$('#loginemail').value,password:$('#loginpassword').value})}).then(r=>r.json()).catch(()=>null);
+  if(!r||!r.ok){$('#passworderr').textContent=r&&r.error||'Email or password was not recognised.';return}
   $('#loginpassword').value='';closeAuth();afterAuth();
 }
 async function refreshMe(){ME=await fetch('/api/me').then(r=>r.json()).catch(()=>({signed_in:false}));
@@ -1436,7 +1588,12 @@ async function doRegister(){
     body:JSON.stringify({name,email,password,adopt_uid:uid()})}).then(r=>r.json()).catch(()=>null);
   if(!r||!r.ok){$('#regerr').textContent=r&&r.error||'Could not create the account — try again.';return}
   $('#regpassword').value='';
+  if(r.confirmation_required){
+    $('#regerr').textContent=ACTIVE_LANG==='pl'?'Sprawdź skrzynkę i potwierdź adres e-mail, a następnie zaloguj się.':'Check your inbox to confirm your email, then sign in.';
+    return;
+  }
   localStorage.removeItem('bb_uid');
+  if(!r.recovery_key){closeAuth();await afterAuth();return}
   window._key=r.recovery_key;$('#keybox').textContent=r.recovery_key;
   ME={signed_in:true,name:r.name,portfolio:null};renderAuth();showAV('keyshow');
 }
@@ -1722,7 +1879,7 @@ function renderMe(r){
   $('#mebody').innerHTML=`
     <div class="mehead rv in">
       <div><div class="sec-k">Your Blackbox</div>
-        <h2 style="margin-bottom:4px">${r.name}'s Blackbox</h2>
+        <h2 style="margin-bottom:4px">${esc(r.name)}'s Blackbox</h2>
         <div style="color:var(--mut);font-size:13.5px">since ${r.created} · paper portfolio · marked to live markets</div></div>
       <div class="mehead-btns"><button class="cta ghost" onclick="printStatement()">🖨 Statement</button>
       <button class="cta ghost" onclick="resetMe()">Change strategy</button></div></div>
