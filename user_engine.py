@@ -223,8 +223,9 @@ def settle_users():
     return n
 
 
-def marks():
+def marks(strategy_ids=None):
     """Per-strategy live state: holdings, day-return-so-far, note, sentiment tilt."""
+    selected = tuple(sorted(set(strategy_ids) & set(SENT_BUCKETS))) if strategy_ids is not None else tuple(SENT_BUCKETS)
     def f():
         import json
         sent = None
@@ -233,7 +234,7 @@ def marks():
         except Exception:
             pass
         out = {}
-        for sid in SENT_BUCKETS:
+        for sid in selected:
             try:
                 hw, note = _holdings(sid)
                 dr = _strategy_dayret(sid, hw)
@@ -256,4 +257,4 @@ def marks():
                         "holdings": [{"inst": i, "name": NAMES.get(i, i), "w": round(w * 100, 1)}
                                      for i, w in top]}
         return {"generated": datetime.now(timezone.utc).isoformat(), "strategies": out}
-    return _c("marks", 1200, f)
+    return _c("marks:" + ",".join(selected), 1200, f)

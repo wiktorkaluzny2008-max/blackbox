@@ -517,7 +517,7 @@ def _user_payload(uid):
         return None
     try:
         from user_engine import marks
-        mk = marks()["strategies"]
+        mk = marks(u["mix"])["strategies"]
     except Exception:
         mk = {}
     day = 0.0
