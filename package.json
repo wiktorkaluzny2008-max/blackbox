@@ -1,0 +1,6 @@
+{
+  "name": "blackbox-hosting", "private": true, "type": "module",
+  "scripts": {"deploy": "wrangler deploy", "check": "node --check cloudflare/worker.js"},
+  "dependencies": {"@cloudflare/containers": "0.3.7"},
+  "devDependencies": {"wrangler": "4.157.0"}
+}
