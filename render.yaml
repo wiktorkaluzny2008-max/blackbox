@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: blackbox
+    runtime: docker
+    plan: free
+    region: frankfurt
+    branch: main
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /
+    envVars:
+      - key: APP_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false

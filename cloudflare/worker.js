@@ -1,25 +1,23 @@
-import { Container, getContainer } from '@cloudflare/containers';
-
-export class BlackboxContainer extends Container {
-  defaultPort = 8090;
-  sleepAfter = '10m';
-  constructor(ctx, env) {
-    super(ctx, env);
-    this.envVars = {};
-    for (const key of ['APP_SECRET', 'DATABASE_URL', 'GROQ_API_KEY', 'OANDA_API_KEY', 'OANDA_ACCOUNT_ID', 'GOOGLE_CLIENT_ID']) {
-      if (env[key]) this.envVars[key] = env[key];
-    }
-    this.envVars.OANDA_ENV = 'practice';
-  }
-}
-
+// Optional free Cloudflare entry point. Python runs on Render Free.
 export default {
   async fetch(request, env) {
-    if (!env.APP_SECRET || !env.DATABASE_URL) {
-      return new Response('Blackbox setup is not complete. Please try again later.', {
-        status: 503, headers: { 'Cache-Control': 'no-store' }
-      });
+    let origin;
+    try {
+      origin = new URL(env.RENDER_ORIGIN);
+      if (origin.protocol !== 'https:' || !origin.hostname.endsWith('.onrender.com') || origin.username || origin.password || origin.port) throw new Error('Invalid origin');
+    } catch {
+      return new Response('Blackbox setup is not complete. Please try again later.', {status: 503, headers: {'Cache-Control': 'no-store'}});
     }
-    return getContainer(env.BLACKBOX, 'production').fetch(request);
+    const incoming = new URL(request.url);
+    const target = new URL(origin.origin);
+    target.pathname = incoming.pathname;
+    target.search = incoming.search;
+    // Preserve method, cookies and body; never use the incoming Host as origin.
+    const upstream = new Request(target, request);
+    upstream.headers.delete('host');
+    const response = await fetch(upstream, {redirect: 'manual'});
+    const result = new Response(response.body, response);
+    result.headers.set('Cache-Control', 'no-store');
+    return result;
   }
 };
