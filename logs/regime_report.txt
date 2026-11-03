@@ -1,0 +1,23 @@
+REGIME RADAR — training report
+============================================================
+Data: 13 crypto assets, 2016-07-18 .. 2026-10-23, 30,840 labelled coin-days
+Split (by date, no shuffle): train 12,194 | val 6,586 (from 2022-09-15) | test 11,810 (from 2024-03-30)
+Target: will the next 10 days be turbulent — realised vol in the top third of the training era (> 101% annualised)? Turbulent rate: train 34% / test 15%
+Chosen model (best on validation): neural_net  (decision threshold 0.26, tuned on validation)
+
+model                     acc   prec  recall     F1    AUC
+------------------------------------------------------------
+neural network          0.711  0.262   0.490  0.341  0.667
+random forest           0.508  0.202   0.752  0.318  0.681
+baseline: majority      0.847  0.000   0.000  0.000  0.500
+baseline: persistence   0.761  0.223   0.227  0.225  0.632
+
+Most informative features (random-forest importance):
+  vol30       0.180
+  ret60       0.124
+  vol20       0.120
+  vol10       0.107
+  ma_dist200  0.093
+  ma_dist50   0.078
+  vol5        0.055
+  ma_dist20   0.053
