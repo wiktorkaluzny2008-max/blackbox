@@ -915,7 +915,7 @@ border-radius:20px;padding:28px;margin-top:34px}
 /* top nav + auth */
 .topnav{position:fixed;top:0;left:0;right:0;z-index:40;background:rgba(11,9,6,.65);
 backdrop-filter:blur(16px);border-bottom:1px solid var(--line)}
-.tn{display:flex;align-items:center;height:60px;gap:14px}
+.tn{display:flex;align-items:center;min-height:60px;gap:14px;max-width:1440px}
 .brand{font-family:'Fraunces';font-weight:600;font-style:italic;font-size:17px;letter-spacing:.02em;cursor:pointer;flex-shrink:0}
 .navlinks{display:flex;gap:2px;flex:1;min-width:0;overflow-x:auto;scrollbar-width:none;-ms-overflow-style:none}
 .navlinks::-webkit-scrollbar{display:none}
@@ -945,6 +945,29 @@ footer{border-top:1px solid var(--line);padding:44px 0 60px;color:var(--mut);fon
 footer .d{max-width:820px;line-height:1.7}
 @media(prefers-reduced-motion:reduce){.rv,.orb,h1 .w,.gauge i{animation:none!important;transition:none!important;opacity:1!important;transform:none!important}}
 @media(max-width:640px){section{padding:64px 0}.quiz{padding:24px}.stats{grid-template-columns:repeat(2,1fr);gap:12px}}
+/* Whole translated phrases retain their spacing and wrap naturally. */
+h1{line-height:1.12;max-width:1050px}
+h1 .hero-line{display:block;text-wrap:balance;overflow-wrap:break-word}
+@media(max-width:1250px){
+ .tn{flex-wrap:wrap;gap:8px 12px;padding-top:10px;padding-bottom:10px}
+ .tn .brand{margin-right:auto}
+ .navlinks{order:4;flex:0 0 100%;width:100%;padding-bottom:3px;scrollbar-width:thin}
+ .navlinks::-webkit-scrollbar{display:block;height:3px}
+ .navlinks::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+ .hero .wrap{padding-top:150px}
+ section:not(.hero){scroll-margin-top:120px}
+}
+@media(max-width:480px){
+ .tn{column-gap:8px}
+ .tn .cta.small{padding:9px 10px;font-size:13px}
+ .tn .brand{font-size:16px}
+ .hero .wrap{padding-top:145px;padding-bottom:48px}
+ h1{font-size:clamp(36px,10vw,46px)}
+ .kicker{font-size:11px;line-height:1.5;max-width:100%}
+ .sub{font-size:16px}
+ .hstats{gap:22px;margin-top:36px}
+ .hstat{flex:1 1 135px;min-width:0}
+}
 </style></head><body>
 
 <nav class="topnav"><div class="wrap tn">
@@ -1323,6 +1346,7 @@ async function changeLanguage(lang,initial=false){
   if(ACTIVE_LANG==='pl'&&!Object.keys(PL_MAP).length){
     PL_MAP=await fetch('/api/i18n/pl').then(r=>r.json()).catch(()=>({}));
   }
+  renderHeadline();
   translateTree();
 }
 new MutationObserver(records=>{
@@ -1331,8 +1355,21 @@ new MutationObserver(records=>{
 }).observe(document.body,{childList:true,subtree:true});
 if(ACTIVE_LANG==='pl')changeLanguage('pl',true);
 
-(function(){const words=[['Your'],['own'],['Blackbox.'],['Live','grad'],['in'],['minutes.','grad']];
-$('#hl').innerHTML=words.map((w,i)=>`<span class="w ${w[1]||''}" style="animation-delay:${i*90}ms">${w[0]}&nbsp;</span>`).join('')})();
+function renderHeadline(){
+  const heading=$('#hl');
+  heading.setAttribute('data-no-translate','');
+  const phrases=ACTIVE_LANG==='pl'
+    ? ['Twój własny Blackbox.','Gotowy w kilka minut.']
+    : ['Your own Blackbox.','Live in minutes.'];
+  heading.replaceChildren(...phrases.map((text,i)=>{
+    const line=document.createElement('span');
+    line.className='w hero-line'+(i?' grad':'');
+    line.style.animationDelay=(i*120)+'ms';
+    line.textContent=text;
+    return line;
+  }));
+}
+renderHeadline();
 
 const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{rootMargin:'-80px'});
 document.querySelectorAll('.rv').forEach(el=>io.observe(el));
