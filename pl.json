@@ -367,5 +367,8 @@
   "Could not create the account — try again.": "Nie udało się utworzyć konta. Spróbuj ponownie.",
   "Email or password was not recognised.": "Nieprawidłowy adres e-mail lub hasło.",
   "Enter an email and a password of at least 12 characters.": "Podaj adres e-mail i hasło składające się z co najmniej 12 znaków.",
-  "Could not start — check the mix totals 100%.": "Nie udało się uruchomić portfela. Sprawdź, czy suma udziałów wynosi 100%."
+  "Could not start — check the mix totals 100%.": "Nie udało się uruchomić portfela. Sprawdź, czy suma udziałów wynosi 100%.",
+  "News refreshes on demand when you visit this page. The briefing uses recent scans only and reports their time and source count. Source availability varies; this is educational commentary, not investment advice.": "Wiadomości są odświeżane na żądanie po wejściu na tę stronę. Raport korzysta tylko z aktualnych skanów i podaje ich czas oraz liczbę źródeł. Dostępność źródeł jest zmienna. To komentarz edukacyjny, a nie porada inwestycyjna.",
+  "Free hosting may sleep between visits. News is refreshed on demand, not continuously.": "Darmowy hosting może być usypiany między wizytami. Wiadomości są odświeżane na żądanie, a nie w sposób ciągły.",
+  "Checking recent news and preparing the briefing…": "Sprawdzanie aktualnych wiadomości i przygotowywanie raportu…"
 }

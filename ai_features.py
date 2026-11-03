@@ -52,13 +52,23 @@ def briefing():
     historical-analog snapshot. Returns dict or None."""
     if not ai_client.available():
         return None
+    from datetime import datetime, timezone
     sent = _load(SENTIMENT, {})
-    assets = sent.get("assets", {})
+    try:
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(sent['generated'])).total_seconds()
+        fresh = 0 <= age <= 5400
+    except (KeyError, TypeError, ValueError):
+        fresh = False
+    if not fresh or not sent.get('n_scanned'):
+        from news_refresh import request_refresh
+        return {'available': False, 'reason': request_refresh(), 'generated': sent.get('generated')}
+    assets = {a: v for a, v in sent.get('assets', {}).items() if v.get('n_items', 0) > 0}
     if not assets:
-        return None
+        return {'available': False, 'reason': 'news_unavailable'}
     lines = [f"- {a}: score {v.get('score')} ({v.get('trend','')}), {v.get('explanation','')}"
              for a, v in assets.items()]
-    analog = _load(ANALOG, {})
+    # An old analog file is not evidence for the current news scan.
+    analog = {}
     an = ""
     if analog.get("event"):
         an = (f"\nClosest historical analog to today's news: {analog['event'].get('title')} "
@@ -72,9 +82,9 @@ def briefing():
         "in general educational terms (no advice, no buy/sell calls).\n\n"
         f"AI SENTIMENT READS:\n{chr(10).join(lines)}{an}"
     )
-    text = ai_client.ask(prompt, system=GUARD, max_tokens=650)
+    text = ai_client.ask(prompt, system=GUARD, max_tokens=1000)
     if not text:
-        return None
+        return {'available': False, 'reason': 'ai_unavailable'}
     return {"text": text, "generated": sent.get("generated"),
             "n_scanned": sent.get("n_scanned"),
             "scores": {a: v.get("score") for a, v in assets.items()}}

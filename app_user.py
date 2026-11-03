@@ -68,7 +68,8 @@ def cached(key, ttl, fn):
     if key in _cache and now - _cache[key][0] < ttl:
         return _cache[key][1]
     v = fn()
-    _cache[key] = (now, v)
+    if v is not None and not (isinstance(v, dict) and v.get('available') is False):
+        _cache[key] = (now, v)
     return v
 
 
@@ -154,7 +155,7 @@ def api_regime():
 def api_ai_briefing():
     try:
         import ai_features
-        doc = cached(_lang() + "_ai_briefing", 1800, ai_features.briefing)
+        doc = cached(_lang() + "_ai_briefing", 60, ai_features.briefing)
         return jsonify(doc or {"available": False})
     except Exception as e:
         return jsonify({"available": False, "error": str(e)})
@@ -1267,10 +1268,10 @@ h1 .hero-line{display:block;text-wrap:balance;overflow-wrap:break-word}
   <div class="wrap" style="max-width:900px">
     <div class="rv in"><div class="sec-k">Daily briefing</div>
     <h2>Today's market, read by AI</h2>
-    <p class="lead">Every cycle, the AI scanner reads hundreds of real news and social sources and scores six asset classes. This briefing synthesises that live read — plus the closest historical analog — into a plain-English summary of the day. It describes the mood and what it means for a diversified systematic portfolio; it is not advice, and it never invents a number.</p></div>
+    <p class="lead">News refreshes on demand when you visit this page. The briefing uses recent scans only and reports their time and source count. Source availability varies; this is educational commentary, not investment advice.</p></div>
     <div id="briefingScores" class="briefrow"></div>
     <div id="briefingBox" class="acard" style="margin-top:22px"></div>
-    <div class="note" style="margin-top:14px">Regenerated periodically from the live sentiment scan. Educational synthesis only — every strategy still trades on its validated rules.</div>
+    <div class="note" style="margin-top:14px">Free hosting may sleep between visits. News is refreshed on demand, not continuously.</div>
   </div>
 </section>
 </div>
@@ -2130,7 +2131,7 @@ function renderSentiment(){
     </div>`}).join('');
 }
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const aiUnavail="AI isn't available right now — this feature needs an AI key configured on the server.";
+const aiUnavail="AI is temporarily unavailable. Please try again later.";
 
 /* ---------- inline 'explain this metric' AI popover ---------- */
 const GLOSS_CACHE={};
@@ -2220,14 +2221,20 @@ let briefLoaded=false;
 async function loadBriefing(){
   if(briefLoaded)return;briefLoaded=true;
   const box=$('#briefingBox'),scores=$('#briefingScores');
-  box.innerHTML='<div class="askel"><span class="sp"></span>AI is writing today\'s briefing from the live scan…</div>';
+  box.innerHTML='<div class="askel"><span class="sp"></span>Checking recent news and preparing the briefing…</div>';
   const d=await fetch('/api/ai/briefing').then(r=>r.json()).catch(()=>null);
-  if(!d||d.available===false||!d.text){box.innerHTML='<div class="askel">'+aiUnavail+'</div>';return}
+  if(!d||d.available===false||!d.text){
+    briefLoaded=false;scores.innerHTML='';
+    const pl=ACTIVE_LANG==='pl';
+    const msgs=pl?{refreshing:'Trwa pobieranie aktualnych wiadomości. Spróbuj ponownie za minutę.',news_unavailable:'Brak aktualnych wiadomości. Nie wyświetlamy starego raportu jako dzisiejszego.'}:{refreshing:'Fetching current news. Try again in a minute.',news_unavailable:'Current news is unavailable. An old report will not be shown as today’s briefing.'};
+    const msg=msgs[d&&d.reason]||(pl?'AI jest chwilowo niedostępne. Spróbuj ponownie później.':aiUnavail);
+    box.innerHTML='<div class="askel">'+esc(msg)+'</div><button class="btn" onclick="loadBriefing()">'+(pl?'Spróbuj ponownie':'Try again')+'</button>';return;
+  }
   const names={equities:'Equities',gold:'Gold',rates:'Rates',fx:'FX',crypto:'Crypto',oil:'Oil'};
   scores.innerHTML=Object.entries(d.scores||{}).map(([a,v])=>{
     const col=v>12?'var(--green)':v<-12?'var(--red)':'var(--mut)';
     return `<div class="bscore"><div class="ba">${names[a]||a}</div><div class="bv" style="color:${col}">${v>0?'+':''}${v}</div></div>`}).join('');
-  box.innerHTML=`<div class="airich">${esc(d.text)}</div>`;
+  box.innerHTML=`<div class="airich">${esc(d.text)}</div><div class="note">${esc(d.generated||'')} · ${esc(d.n_scanned||0)} ${L('headlines','nagłówków')}</div>`;
 }
 
 /* ---------- Learn page (glossary + tutor) ---------- */
