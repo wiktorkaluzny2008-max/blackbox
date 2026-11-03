@@ -1501,17 +1501,16 @@ async function boot(){
   go(pageFromPath(),false);
 }
 
-async function ensureAccountPage(){
-  const have=(ME&&ME.signed_in&&ME.portfolio)||uid();
-  if(!have){
+function showEmptyPortfolio(){
     $('#mebody').innerHTML=`<div class="skel" style="text-align:left;padding:60px 0">
       <h2 style="font-size:28px;margin-bottom:10px">You don't have a Blackbox yet</h2>
       <p style="color:var(--mut);margin-bottom:22px">Answer seven questions or build your own mix to start a personal paper portfolio.</p>
       <button class="cta" onclick="go('start')">Start my Blackbox →</button>
     </div>`;
-    return;
-  }
-  if(ME&&ME.signed_in&&ME.portfolio)renderMe(ME.portfolio);else await loadMe();
+}
+async function ensureAccountPage(){
+  $('#mebody').innerHTML='<div class="skel"><span class="sp"></span>'+ (ACTIVE_LANG==='pl'?'Wczytywanie Twojego portfela…':'Loading your portfolio…')+'</div>';
+  await loadMe();
 }
 
 /* ---------- historical analog ---------- */
@@ -1695,16 +1694,26 @@ async function resetMe(){if(!confirm('Delete this Blackbox and start over?'))ret
   localStorage.removeItem('bb_uid');location.reload()}
 
 async function loadMe(){
-  let r=null;
-  if(ME&&ME.signed_in){
-    const m=await fetch('/api/me').then(r=>r.json()).catch(()=>null);
-    if(m&&m.signed_in){ME=m;r=m.portfolio}
-  } else if(uid()){
-    r=await fetch('/api/user/'+uid()).then(r=>r.ok?r.json():null).catch(()=>null);
-    if(!r)localStorage.removeItem('bb_uid');
+  try{
+    const response=await fetch('/api/me');
+    if(!response.ok)throw new Error('Account unavailable');
+    const m=await response.json();
+    ME=m;renderAuth();
+    let portfolio=m.signed_in?m.portfolio:null;
+    if(!m.signed_in&&uid()){
+      const guest=await fetch('/api/user/'+encodeURIComponent(uid()));
+      if(guest.ok)portfolio=await guest.json();
+      else if(guest.status===404||guest.status===403)localStorage.removeItem('bb_uid');
+      else throw new Error('Portfolio unavailable');
+    }
+    if(pageFromPath()!=='account')return;
+    if(portfolio){renderMe(portfolio);return}
+    showEmptyPortfolio();
+  }catch{
+    if(pageFromPath()!=='account')return;
+    $('#mebody').innerHTML='<div class="skel">'+(ACTIVE_LANG==='pl'?'Nie udało się wczytać portfela. Twoje dane nie zostały usunięte.':'Could not load your portfolio. Your saved data has not been deleted.')+
+      '<br><button class="cta" onclick="ensureAccountPage()">'+(ACTIVE_LANG==='pl'?'Spróbuj ponownie':'Try again')+'</button></div>';
   }
-  if(!r){$('#mebody').innerHTML='<div class="skel">Couldn\'t find that Blackbox — it may have been deleted.</div>';return}
-  renderMe(r);
 }
 function renderMe(r){
   window._meUid=r.uid;LAST_PORTFOLIO=r;
