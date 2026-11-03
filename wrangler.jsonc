@@ -3,5 +3,10 @@
   "name": "blackbox",
   "main": "cloudflare/worker.js",
   "compatibility_date": "2026-11-03",
-  "observability": {"enabled": true}
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "RENDER_ORIGIN": "https://blackbox-i0ov.onrender.com"
+  }
 }
